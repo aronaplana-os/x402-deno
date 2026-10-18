@@ -1,0 +1,6 @@
+{
+  "tasks": {
+    "check": "deno check src/x402.ts examples/deno-server.ts test/smoke_test.ts",
+    "test": "deno test --unstable-kv --allow-net test/smoke_test.ts"
+  }
+}
