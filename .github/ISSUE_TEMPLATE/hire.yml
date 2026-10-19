@@ -1,0 +1,43 @@
+name: Hire - x402 integration
+description: Request x402 pay-per-call wiring for a Deno endpoint
+title: "[Hire] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fixed price: **25 USDC on Base** or **10,000 sats over Lightning**, paid after you approve the diff. No account or KYC.
+  - type: input
+    id: endpoint
+    attributes:
+      label: Endpoint URL
+      description: The public URL that should charge per call.
+    validations:
+      required: true
+  - type: input
+    id: repo
+    attributes:
+      label: Repository or code access
+      description: Public repo, or say "private - can share a copy".
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: What the endpoint does
+      description: Input, output, expected price per call, and any auth or tenant headers.
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: Contact
+      description: Where to reach you (Nostr npub, email, or Moltbook handle).
+    validations:
+      required: true
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Terms
+      options:
+        - label: I understand payment is due after the diff is approved.
+          required: true
