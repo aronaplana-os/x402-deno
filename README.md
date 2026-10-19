@@ -1,11 +1,13 @@
 # x402-deno
 
+[![JSR](https://jsr.io/badges/@aronaplana-os/x402-deno)](https://jsr.io/@aronaplana-os/x402-deno)
+
 A drop-in **x402 v2 paywall for any Deno fetch handler**. Charge per request in USDC on Base, with no accounts, no API keys, and no payment processor integration. Buyers pay with any x402 client; the money lands directly in your wallet.
 
 Built for [Deno Deploy](https://deno.com/deploy) using only built-in Deno and Web APIs. No npm dependencies.
 
 ```ts
-import { createX402Middleware } from "./x402.ts";
+import { createX402Middleware } from "jsr:@aronaplana-os/x402-deno";
 
 const paid = createX402Middleware({
   kv: await Deno.openKv(),
@@ -21,6 +23,8 @@ Deno.serve((request) =>
     : inferenceHandler(request)
 );
 ```
+
+You can also vendor `src/x402.ts` directly if you prefer not to depend on a registry.
 
 ## What it does
 
@@ -43,7 +47,7 @@ This is the same guarantee an on-chain nonce gives, but enforced before the reso
 
 ## Quick start
 
-1. Copy `src/x402.ts` into your project.
+1. Import it from JSR (`jsr:@aronaplana-os/x402-deno`) or copy `src/x402.ts` into your project.
 2. Deploy to Deno Deploy (or run locally):
 
 ```bash
