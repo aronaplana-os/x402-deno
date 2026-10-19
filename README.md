@@ -54,6 +54,8 @@ This is the same guarantee an on-chain nonce gives, but enforced before the reso
 deno run --unstable-kv --allow-net --allow-env main.ts
 ```
 
+> Deno 2.9+ applies a 24-hour minimum dependency age by default. If you are trying a version published within the last day, pass `--minimum-dependency-age 0` (or set `"minimumDependencyAge": 0` in your `deno.json`).
+
 3. Set environment variables:
 
 | Variable | Required | Description |
