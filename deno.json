@@ -1,6 +1,17 @@
 {
+  "name": "@aronaplana-os/x402-deno",
+  "version": "1.1.0",
+  "exports": "./src/x402.ts",
+  "publish": {
+    "include": [
+      "src/x402.ts",
+      "README.md",
+      "LICENSE",
+      "deno.json"
+    ]
+  },
   "tasks": {
-    "check": "deno check src/x402.ts examples/deno-server.ts test/smoke_test.ts",
-    "test": "deno test --unstable-kv --allow-net test/smoke_test.ts"
+    "check": "deno check src/x402.ts examples/deno-server.ts test/smoke_test.ts test/reconcile_test.ts",
+    "test": "deno test --unstable-kv --allow-net test/"
   }
 }
