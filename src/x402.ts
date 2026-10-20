@@ -1965,3 +1965,272 @@ export async function recordConfirmedSettlement(
     );
   }
 }
+
+export type ReconcileOptions = {
+  kv: Deno.Kv;
+  rpcUrl?: string;
+  limit?: number;
+  now?: number;
+};
+
+export type ReconcileResult = {
+  scanned: number;
+  settled: number;
+  expired: number;
+  pending: number;
+  errors: number;
+};
+
+const BASE_RPC_DEFAULT = "https://mainnet.base.org";
+
+/** keccak256("AuthorizationUsed(address,bytes32)") */
+const AUTHORIZATION_USED_TOPIC =
+  "0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5";
+
+/** bytes4(keccak256("authorizationState(address,bytes32)")) */
+const AUTHORIZATION_STATE_SELECTOR = "0xe94a0102";
+
+function word(value: string): string {
+  if (!ADDRESS.test(value) && !NONCE.test(value)) {
+    throw new Error("Invalid address or nonce");
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/^0x/, "")
+    .padStart(64, "0");
+}
+
+async function rpc(
+  rpcUrl: string,
+  method: string,
+  params: unknown[],
+): Promise<unknown> {
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!response.ok) {
+    void response.body?.cancel();
+    throw new Error("rpc_http_" + response.status);
+  }
+
+  const doc = await response.json() as
+    | { result?: unknown; error?: unknown }
+    | null;
+
+  if (
+    doc === null ||
+    typeof doc !== "object" ||
+    doc.error !== undefined
+  ) {
+    throw new Error("rpc_error");
+  }
+
+  return doc.result;
+}
+
+async function authorizationUsed(
+  rpcUrl: string,
+  payer: string,
+  nonce: string,
+): Promise<boolean> {
+  const result = await rpc(rpcUrl, "eth_call", [
+    {
+      to: ASSET,
+      data: AUTHORIZATION_STATE_SELECTOR +
+        word(payer) +
+        word(nonce),
+    },
+    "latest",
+  ]);
+
+  if (typeof result !== "string" || !/^0x[0-9a-fA-F]{1,64}$/.test(result)) {
+    throw new Error("rpc_bad_result");
+  }
+
+  return BigInt(result) === 1n;
+}
+
+/**
+ * Best effort: find the settling transaction for an authorization
+ * that is already used on-chain.
+ */
+async function authorizationTx(
+  rpcUrl: string,
+  payer: string,
+  nonce: string,
+): Promise<string> {
+  try {
+    const headHex = await rpc(rpcUrl, "eth_blockNumber", []);
+
+    if (typeof headHex !== "string") return "";
+
+    const head = Number(BigInt(headHex));
+    const from = Math.max(0, head - 50000);
+
+    const logs = await rpc(rpcUrl, "eth_getLogs", [
+      {
+        address: ASSET,
+        fromBlock: "0x" + from.toString(16),
+        toBlock: "latest",
+        topics: [
+          AUTHORIZATION_USED_TOPIC,
+          "0x" + word(payer),
+          "0x" + word(nonce),
+        ],
+      },
+    ]);
+
+    if (Array.isArray(logs) && logs.length > 0) {
+      const tx = (logs[0] as { transactionHash?: unknown })
+        .transactionHash;
+
+      if (typeof tx === "string" && TX_HASH.test(tx)) {
+        return tx;
+      }
+    }
+  } catch {
+    // The nonce check is authoritative; the hash is a receipt detail.
+  }
+
+  return "";
+}
+
+/**
+ * Reconcile paid-but-undelivered claims.
+ *
+ * A handler can settle successfully and then die before writing
+ * "settled". The buyer's retry then fails /verify because the
+ * on-chain nonce is already used. The buffered response is still
+ * in KV, so the correct resolution is to check the chain and, if
+ * the nonce was used, mark the record settled and let the cached
+ * response be replayed.
+ *
+ * Run this from a cron/queue, or call it from an admin endpoint.
+ * It performs one bounded page (options.limit, default 100).
+ */
+export async function reconcilePendingSettlements(
+  options: ReconcileOptions,
+): Promise<ReconcileResult> {
+  const rpcUrl = options.rpcUrl ?? BASE_RPC_DEFAULT;
+  const limit = options.limit ?? 100;
+  const now = options.now ?? Date.now();
+
+  const result: ReconcileResult = {
+    scanned: 0,
+    settled: 0,
+    expired: 0,
+    pending: 0,
+    errors: 0,
+  };
+
+  const entries = options.kv.list<Ledger>(
+    {
+      prefix: [
+        "x402-v2",
+        NETWORK,
+        ASSET.toLowerCase(),
+      ],
+    },
+    { limit },
+  );
+
+  for await (const entry of entries) {
+    const ledger = entry.value;
+
+    if (
+      !ledger ||
+      (
+        ledger.state !== "settling" &&
+        ledger.state !== "uncertain"
+      )
+    ) {
+      continue;
+    }
+
+    result.scanned++;
+
+    const payer = String(entry.key[3]);
+    const nonce = String(entry.key[4]);
+
+    try {
+      if (await authorizationUsed(rpcUrl, payer, nonce)) {
+        const transaction = await authorizationTx(
+          rpcUrl,
+          payer,
+          nonce,
+        );
+
+        const settlement: Settlement = {
+          success: true,
+          transaction,
+          network: NETWORK,
+          payer,
+        };
+
+        const next: Ledger = {
+          ...ledger,
+          state: "settled",
+          settlement,
+          transaction,
+        };
+
+        const commit = await options.kv.atomic()
+          .check(entry)
+          .set(
+            entry.key,
+            next,
+            {
+              expireIn: Math.max(
+                RETAIN_AFTER_EXPIRY_MS,
+                expiry(next),
+              ),
+            },
+          )
+          .commit();
+
+        if (commit.ok) {
+          result.settled++;
+        } else {
+          result.pending++;
+        }
+
+        continue;
+      }
+
+      const validBefore =
+        ledger.expiresAt - RETAIN_AFTER_EXPIRY_MS;
+
+      if (now >= validBefore) {
+        const commit = await options.kv.atomic()
+          .check(entry)
+          .delete(entry.key)
+          .commit();
+
+        if (commit.ok) {
+          result.expired++;
+        } else {
+          result.pending++;
+        }
+      } else {
+        result.pending++;
+      }
+    } catch {
+      result.errors++;
+    }
+  }
+
+  return result;
+}
